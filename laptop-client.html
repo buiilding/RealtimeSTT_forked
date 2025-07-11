@@ -1,0 +1,259 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Laptop STT Client</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      max-width: 800px;
+      margin: 0 auto;
+      padding: 20px;
+      background-color: #f5f5f5;
+    }
+    .container {
+      background: white;
+      padding: 20px;
+      border-radius: 8px;
+      box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+    }
+    .config-section {
+      background: #f8f9fa;
+      padding: 15px;
+      border-radius: 5px;
+      margin-bottom: 20px;
+    }
+    input, button {
+      padding: 10px;
+      margin: 5px;
+      border: 1px solid #ddd;
+      border-radius: 4px;
+    }
+    button {
+      background: #007bff;
+      color: white;
+      cursor: pointer;
+    }
+    button:hover {
+      background: #0056b3;
+    }
+    button:disabled {
+      background: #ccc;
+      cursor: not-allowed;
+    }
+    .status {
+      padding: 10px;
+      margin: 10px 0;
+      border-radius: 4px;
+      font-weight: bold;
+    }
+    .status.connected {
+      background: #d4edda;
+      color: #155724;
+      border: 1px solid #c3e6cb;
+    }
+    .status.disconnected {
+      background: #f8d7da;
+      color: #721c24;
+      border: 1px solid #f5c6cb;
+    }
+    .transcription-box {
+      background: #f8f9fa;
+      border: 1px solid #dee2e6;
+      border-radius: 4px;
+      padding: 15px;
+      margin: 10px 0;
+      min-height: 100px;
+    }
+    .realtime-text {
+      color: #007bff;
+      font-weight: bold;
+    }
+    .final-text {
+      color: #28a745;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>🎤 RealtimeSTT Client</h1>
+    <p>Connect to your Web VS Code STT Server</p>
+
+    <div class="config-section">
+      <h3>Server Configuration</h3>
+      <label>Server URL: </label>
+      <input type="text" id="serverUrl" placeholder="your-web-vscode-url.com" value="localhost">
+      <br>
+      <label>Control Port: </label>
+      <input type="number" id="controlPort" value="8011">
+      <label>Data Port: </label>
+      <input type="number" id="dataPort" value="8012">
+    </div>
+
+    <div class="config-section">
+      <h3>Connection</h3>
+      <button id="connectBtn" onclick="connectToServer()">Connect to Server</button>
+      <button id="disconnectBtn" onclick="disconnectFromServer()" disabled>Disconnect</button>
+      <div id="connectionStatus" class="status disconnected">Disconnected</div>
+    </div>
+
+    <div class="config-section">
+      <h3>Recording</h3>
+      <button id="startBtn" onclick="startRecording()" disabled>Start Recording</button>
+      <button id="stopBtn" onclick="stopRecording()" disabled>Stop Recording</button>
+    </div>
+
+    <div class="config-section">
+      <h3>Real-time Transcription</h3>
+      <div id="realtimeBox" class="transcription-box">
+        <div id="realtimeText" class="realtime-text">Waiting for speech...</div>
+      </div>
+    </div>
+
+    <div class="config-section">
+      <h3>Final Transcription</h3>
+      <div id="finalBox" class="transcription-box">
+        <div id="finalText" class="final-text">Completed sentences will appear here...</div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    let dataSocket = null;
+    let audioContext = null;
+    let mediaStream = null;
+    let mediaProcessor = null;
+
+    function getWebSocketURL(host, port) {
+      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+      return `${protocol}//${host}:${port}`;
+    }
+
+    function updateStatus(message, isConnected = false) {
+      const statusDiv = document.getElementById('connectionStatus');
+      statusDiv.textContent = message;
+      statusDiv.className = `status ${isConnected ? 'connected' : 'disconnected'}`;
+    }
+
+    function connectToServer() {
+      const serverUrl = document.getElementById('serverUrl').value;
+      const dataPort = document.getElementById('dataPort').value;
+      const dataURL = getWebSocketURL(serverUrl, dataPort);
+
+      console.log('Connecting to:', dataURL);
+      
+      dataSocket = new WebSocket(dataURL);
+
+      dataSocket.onopen = () => {
+        updateStatus('Connected to STT Server!', true);
+        document.getElementById('connectBtn').disabled = true;
+        document.getElementById('disconnectBtn').disabled = false;
+        document.getElementById('startBtn').disabled = false;
+        console.log('Connected to data WebSocket');
+      };
+
+      dataSocket.onmessage = (event) => {
+        try {
+          const message = JSON.parse(event.data);
+          
+          if (message.type === "realtime") {
+            document.getElementById('realtimeText').textContent = message.text;
+          } else if (message.type === "fullSentence") {
+            const finalText = document.getElementById('finalText');
+            finalText.textContent += message.text + ' ';
+          }
+        } catch (e) {
+          console.error('Error parsing message:', e);
+        }
+      };
+
+      dataSocket.onclose = () => {
+        updateStatus('Disconnected from STT Server');
+        document.getElementById('connectBtn').disabled = false;
+        document.getElementById('disconnectBtn').disabled = true;
+        document.getElementById('startBtn').disabled = true;
+        document.getElementById('stopBtn').disabled = true;
+      };
+
+      dataSocket.onerror = (error) => {
+        console.error('WebSocket error:', error);
+        updateStatus('Error connecting to STT Server');
+      };
+    }
+
+    function disconnectFromServer() {
+      if (dataSocket) {
+        dataSocket.close();
+      }
+      stopRecording();
+    }
+
+    async function startRecording() {
+      try {
+        document.getElementById('startBtn').disabled = true;
+        document.getElementById('stopBtn').disabled = false;
+        document.getElementById('realtimeText').textContent = 'Recording...';
+
+        audioContext = new AudioContext();
+        mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        const input = audioContext.createMediaStreamSource(mediaStream);
+
+        mediaProcessor = audioContext.createScriptProcessor(1024, 1, 1);
+        mediaProcessor.onaudioprocess = (event) => {
+          const audioData = event.inputBuffer.getChannelData(0);
+          sendAudioChunk(audioData, audioContext.sampleRate);
+        };
+
+        input.connect(mediaProcessor);
+        mediaProcessor.connect(audioContext.destination);
+
+      } catch (error) {
+        console.error('Error accessing microphone:', error);
+        updateStatus('Error accessing microphone');
+        stopRecording();
+      }
+    }
+
+    function stopRecording() {
+      if (mediaProcessor && audioContext) {
+        mediaProcessor.disconnect();
+        audioContext.close();
+      }
+
+      if (mediaStream) {
+        mediaStream.getTracks().forEach(track => track.stop());
+      }
+
+      document.getElementById('startBtn').disabled = false;
+      document.getElementById('stopBtn').disabled = true;
+      document.getElementById('realtimeText').textContent = 'Stopped recording';
+    }
+
+    function sendAudioChunk(audioData, sampleRate) {
+      if (dataSocket && dataSocket.readyState === WebSocket.OPEN) {
+        const float32Array = new Float32Array(audioData);
+        const pcm16Data = new Int16Array(float32Array.length);
+
+        for (let i = 0; i < float32Array.length; i++) {
+          pcm16Data[i] = Math.max(-1, Math.min(1, float32Array[i])) * 0x7FFF;
+        }
+
+        const metadata = JSON.stringify({ sampleRate });
+        const metadataLength = new Uint32Array([metadata.length]);
+        const metadataBuffer = new TextEncoder().encode(metadata);
+
+        const message = new Uint8Array(
+          metadataLength.byteLength + metadataBuffer.byteLength + pcm16Data.byteLength
+        );
+        
+        message.set(new Uint8Array(metadataLength.buffer), 0);
+        message.set(metadataBuffer, metadataLength.byteLength);
+        message.set(new Uint8Array(pcm16Data.buffer), metadataLength.byteLength + metadataBuffer.byteLength);
+
+        dataSocket.send(message);
+      }
+    }
+  </script>
+</body>
+</html> 

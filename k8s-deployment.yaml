@@ -1,0 +1,90 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: realtimestt-server
+  labels:
+    app: realtimestt-server
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: realtimestt-server
+  template:
+    metadata:
+      labels:
+        app: realtimestt-server
+    spec:
+      containers:
+      - name: realtimestt-server
+        image: realtimestt:latest  # You'll need to build and push this image
+        ports:
+        - containerPort: 8011
+          name: control
+        - containerPort: 8012
+          name: data
+        env:
+        - name: PYTHONPATH
+          value: "/app"
+        resources:
+          requests:
+            memory: "2Gi"
+            cpu: "1"
+          limits:
+            memory: "4Gi"
+            cpu: "2"
+        command: ["python3", "-m", "RealtimeSTT_server.stt_server"]
+        args:
+        - "--model", "base.en"
+        - "--language", "en"
+        - "--control", "8011"
+        - "--data", "8012"
+        - "--device", "cpu"  # Change to "cuda" if using GPU
+        volumeMounts:
+        - name: cache-volume
+          mountPath: /root/.cache
+      volumes:
+      - name: cache-volume
+        emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: realtimestt-service
+spec:
+  selector:
+    app: realtimestt-server
+  ports:
+  - name: control
+    port: 8011
+    targetPort: 8011
+  - name: data
+    port: 8012
+    targetPort: 8012
+  type: ClusterIP
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: realtimestt-ingress
+  annotations:
+    nginx.ingress.kubernetes.io/rewrite-target: /
+    nginx.ingress.kubernetes.io/websocket-services: "realtimestt-service"
+spec:
+  rules:
+  - host: realtimestt.your-domain.com  # Replace with your domain
+    http:
+      paths:
+      - path: /control
+        pathType: Prefix
+        backend:
+          service:
+            name: realtimestt-service
+            port:
+              number: 8011
+      - path: /data
+        pathType: Prefix
+        backend:
+          service:
+            name: realtimestt-service
+            port:
+              number: 8012 
